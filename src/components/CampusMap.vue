@@ -1,9 +1,32 @@
 <template>
   <div class="wrapper">
     <div ref="mapContainer" class="map-container"></div>
-    <button class="debug-toggle-btn" @click="toggleDebug">
-      {{ DEBUG_MAP ? 'Exit Debug' : 'Debug Map' }}
-    </button>
+    
+    <div class="controls-hint" v-show="!DEBUG_MAP">
+      <div class="hint-item">
+        <span class="hint-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>
+        <span class="hint-label">平移视野</span>
+      </div>
+      <div class="divider"></div>
+      <div class="hint-item">
+        <span class="hint-keys"><kbd class="mouse-kbd">左键拖拽</kbd></span>
+        <span class="hint-label">环绕校园</span>
+      </div>
+      <div class="divider"></div>
+      <div class="hint-item">
+        <span class="hint-keys"><kbd class="mouse-kbd">鼠标滚轮</kbd></span>
+        <span class="hint-label">缩放模型</span>
+      </div>
+    </div>
+
+    <div class="debug-actions">
+      <button class="save-map-btn" v-if="DEBUG_MAP" @click="saveMapTransform">
+        Save Transform
+      </button>
+      <button class="debug-toggle-btn" @click="toggleDebug">
+        {{ DEBUG_MAP ? 'Exit Debug' : 'Debug Map' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -19,6 +42,18 @@ const DEBUG_MAP = ref(false);
 const emit = defineEmits(['building-click']);
 
 const mapContainer = ref(null);
+
+const saveMapTransform = () => {
+  if (!groundPlane) return;
+  const transform = {
+    position: { x: groundPlane.position.x, y: groundPlane.position.y, z: groundPlane.position.z },
+    scale: { x: groundPlane.scale.x, y: groundPlane.scale.y, z: groundPlane.scale.z },
+    rotationZ: groundPlane.rotation.z
+  };
+  localStorage.setItem('campusMapTransform', JSON.stringify(transform));
+  alert('Map transform saved to localStorage! It will be applied automatically on reload.');
+  console.log('Saved Transform:', transform);
+};
 
 const toggleDebug = () => {
   DEBUG_MAP.value = !DEBUG_MAP.value;
@@ -140,34 +175,55 @@ const initThree = () => {
 
   // Add dark ground plane
   const textureLoader = new THREE.TextureLoader();
-  const texture = textureLoader.load('/campus_map.png');
-  texture.colorSpace = THREE.SRGBColorSpace;
+  textureLoader.load('/campus_map.png', (texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
 
-  // Create radial gradient alpha map to fade edges
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const context = canvas.getContext('2d');
-  const gradient = context.createRadialGradient(256, 256, 0, 256, 256, 256);
-  gradient.addColorStop(0.6, 'rgba(255, 255, 255, 1)'); // Opaque center
-  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');   // Transparent edges
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 512, 512);
-  const alphaTexture = new THREE.CanvasTexture(canvas);
+    // Create radial gradient alpha map to fade edges
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    const gradient = context.createRadialGradient(256, 256, 0, 256, 256, 256);
+    gradient.addColorStop(0.6, 'rgba(255, 255, 255, 1)'); // Opaque center
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');   // Transparent edges
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 512, 512);
+    const alphaTexture = new THREE.CanvasTexture(canvas);
 
-  // Use the native image dimensions to prevent distortion
-  const planeGeometry = new THREE.PlaneGeometry(2368, 1344);
-  const planeMaterial = new THREE.MeshBasicMaterial({ 
-    map: texture, 
-    alphaMap: alphaTexture,
-    transparent: true,
-    depthWrite: false 
+    // Normalize map size: always set base width to 2368 so our default scale remains consistent.
+    const baseWidth = 2368;
+    const imgAspect = texture.image.width / texture.image.height;
+    const planeGeometry = new THREE.PlaneGeometry(baseWidth, baseWidth / imgAspect);
+    
+    const planeMaterial = new THREE.MeshBasicMaterial({ 
+      map: texture, 
+      alphaMap: alphaTexture,
+      transparent: true,
+      depthWrite: false 
+    });
+    
+    groundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+    groundPlane.rotation.x = -Math.PI / 2;
+    
+    // Restore saved transform from localStorage or use default
+    const savedStr = localStorage.getItem('campusMapTransform');
+    if (savedStr) {
+      try {
+        const saved = JSON.parse(savedStr);
+        groundPlane.position.set(saved.position.x, saved.position.y, saved.position.z);
+        groundPlane.scale.set(saved.scale.x, saved.scale.y, saved.scale.z);
+        groundPlane.rotation.z = saved.rotationZ;
+      } catch (e) {
+        groundPlane.position.set(190, -1, -50);
+        groundPlane.scale.set(1.45, 1.45, 1.45);
+      }
+    } else {
+      groundPlane.position.set(190, -1, -50);
+      groundPlane.scale.set(1.45, 1.45, 1.45);
+    }
+    
+    scene.add(groundPlane);
   });
-  groundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
-  groundPlane.rotation.x = -Math.PI / 2;
-  groundPlane.position.set(190, -1, -50);
-  groundPlane.scale.set(1.45, 1.45, 1.45);
-  scene.add(groundPlane);
 
   // 5.5 Load Model
   const loader = new GLTFLoader();
@@ -233,8 +289,12 @@ const onKeyDown = (event) => {
   const key = event.key.toLowerCase();
 
   if (DEBUG_MAP.value) {
-    const step = 10;
-    const scaleStep = 0.05;
+    // Hold shift for ultra-fine adjustments
+    const isFine = event.shiftKey;
+    const step = isFine ? 0.5 : 2;
+    const scaleStep = isFine ? 0.001 : 0.005;
+    const rotStep = isFine ? 0.0005 : 0.002;
+    
     switch (key) {
       case 'w': groundPlane.position.z -= step; break;
       case 's': groundPlane.position.z += step; break;
@@ -252,8 +312,8 @@ const onKeyDown = (event) => {
         groundPlane.scale.set(s, s, s);
         break;
       }
-      case 't': groundPlane.rotation.z += 0.01; break;
-      case 'y': groundPlane.rotation.z -= 0.01; break;
+      case 't': groundPlane.rotation.z += rotStep; break;
+      case 'y': groundPlane.rotation.z -= rotStep; break;
       case 'r':
         console.log('Ground position:', groundPlane.position);
         console.log('Ground scale:', groundPlane.scale);
@@ -411,10 +471,77 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
-.debug-toggle-btn {
+.controls-hint {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 10px 24px;
+  border-radius: 30px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  z-index: 100;
+  pointer-events: none; /* Allows clicking through to the map */
+}
+
+.hint-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.hint-keys {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+kbd {
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #333;
+  font-family: Inter, -apple-system, monospace;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.mouse-kbd {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.hint-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #444;
+}
+
+.divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.debug-actions {
   position: absolute;
   bottom: 40px;
   right: 40px;
+  display: flex;
+  gap: 10px;
+  z-index: 1000;
+}
+
+.debug-toggle-btn, .save-map-btn {
   padding: 8px 12px;
   background-color: rgba(0, 0, 0, 0.5);
   color: #fff;
@@ -422,12 +549,19 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  z-index: 1000;
   transition: background-color 0.3s;
 }
 
-.debug-toggle-btn:hover {
+.debug-toggle-btn:hover, .save-map-btn:hover {
   background-color: rgba(0, 0, 0, 0.8);
+}
+
+.save-map-btn {
+  background-color: rgba(0, 90, 156, 0.8); /* Tongji Blue */
+}
+
+.save-map-btn:hover {
+  background-color: rgba(0, 90, 156, 1);
 }
 
 .map-container {
