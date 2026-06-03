@@ -13,6 +13,8 @@
         :buildings="buildings"
         :selected-building="selectedBuilding"
         :navigation-path="navigationPath"
+        @building-click="handleBuildingClick"
+        @clear-selection="handleClearSelection"
       />
       <Dashboard
         :selected-building="selectedBuilding"
@@ -34,6 +36,7 @@ const campusMapRef = ref(null)
 const buildings = ref([
   {
     id: 'library',
+    meshName: 'SipingLibrary',
     name: 'Siping Library',
     nameZh: '四平路校区图书馆',
     category: 'academic',
@@ -43,10 +46,13 @@ const buildings = ref([
     openTime: '07:30 - 22:30',
     floors: 12,
     area: '36,000 m²',
-    crowdLevel: 'medium'
+    crowdLevel: 'medium',
+    crowdPercent: 55,
+    dailyVisitors: 2847
   },
   {
     id: 'zhonghe',
+    meshName: 'ZhongheBuilding',
     name: 'Zhonghe Building',
     nameZh: '衷和楼',
     category: 'academic',
@@ -56,10 +62,13 @@ const buildings = ref([
     openTime: '06:00 - 22:00',
     floors: 20,
     area: '45,000 m²',
-    crowdLevel: 'high'
+    crowdLevel: 'high',
+    crowdPercent: 82,
+    dailyVisitors: 5621
   },
   {
     id: 'auditorium',
+    meshName: 'GrandAuditorium',
     name: 'Grand Auditorium',
     nameZh: '大礼堂',
     category: 'culture',
@@ -69,10 +78,13 @@ const buildings = ref([
     openTime: '08:00 - 21:00',
     floors: 2,
     area: '8,000 m²',
-    crowdLevel: 'low'
+    crowdLevel: 'low',
+    crowdPercent: 18,
+    dailyVisitors: 423
   },
   {
     id: 'south',
+    meshName: 'SouthBuilding',
     name: 'South Teaching Building',
     nameZh: '南楼',
     category: 'academic',
@@ -82,10 +94,13 @@ const buildings = ref([
     openTime: '06:30 - 22:00',
     floors: 6,
     area: '20,000 m²',
-    crowdLevel: 'high'
+    crowdLevel: 'high',
+    crowdPercent: 78,
+    dailyVisitors: 4102
   },
   {
     id: 'north',
+    meshName: 'NorthBuilding',
     name: 'North Teaching Building',
     nameZh: '北楼',
     category: 'academic',
@@ -95,10 +110,13 @@ const buildings = ref([
     openTime: '06:30 - 22:00',
     floors: 6,
     area: '18,000 m²',
-    crowdLevel: 'medium'
+    crowdLevel: 'medium',
+    crowdPercent: 48,
+    dailyVisitors: 2156
   },
   {
     id: 'ruian',
+    meshName: 'RuianBuilding',
     name: 'Ruian Building',
     nameZh: '瑞安楼',
     category: 'admin',
@@ -108,10 +126,13 @@ const buildings = ref([
     openTime: '08:00 - 17:30',
     floors: 10,
     area: '15,000 m²',
-    crowdLevel: 'medium'
+    crowdLevel: 'medium',
+    crowdPercent: 42,
+    dailyVisitors: 980
   },
   {
     id: 'xueyuan',
+    meshName: 'XueyuanCanteen',
     name: 'Xueyuan Canteen',
     nameZh: '学苑食堂',
     category: 'dining',
@@ -121,10 +142,13 @@ const buildings = ref([
     openTime: '06:30 - 09:00 / 11:00 - 13:00 / 17:00 - 19:00',
     floors: 3,
     area: '12,000 m²',
-    crowdLevel: 'high'
+    crowdLevel: 'high',
+    crowdPercent: 91,
+    dailyVisitors: 7892
   },
   {
     id: 'gym',
+    meshName: 'SportsComplex',
     name: 'Sports Complex',
     nameZh: '综合体育馆',
     category: 'sports',
@@ -134,7 +158,9 @@ const buildings = ref([
     openTime: '08:00 - 22:00',
     floors: 4,
     area: '18,000 m²',
-    crowdLevel: 'medium'
+    crowdLevel: 'medium',
+    crowdPercent: 38,
+    dailyVisitors: 1654
   }
 ])
 
@@ -154,14 +180,18 @@ setInterval(() => {
   stats.activeUsers = 300 + Math.floor(Math.random() * 100)
 }, 3000)
 
+// Sidebar click → fly to building on map
 function handleSelectBuilding(building) {
   selectedBuilding.value = building
-  if (campusMapRef.value) {
-    campusMapRef.value.flyToBuilding(building)
+  if (building && campusMapRef.value) {
+    campusMapRef.value.flyToBuilding(building.id)
+  } else if (!building && campusMapRef.value) {
+    campusMapRef.value.clearSelection()
   }
   navigationPath.value = null
 }
 
+// Search by text query
 function handleSearch(query) {
   const found = buildings.value.find(
     b => b.name.toLowerCase().includes(query.toLowerCase()) ||
@@ -172,6 +202,7 @@ function handleSearch(query) {
   }
 }
 
+// Voice search result
 function handleVoiceSearch(buildingName) {
   const found = buildings.value.find(
     b => b.name.toLowerCase().includes(buildingName.toLowerCase()) ||
@@ -180,6 +211,26 @@ function handleVoiceSearch(buildingName) {
   if (found) {
     handleSelectBuilding(found)
   }
+}
+
+// Map click → update selected building in sidebar & dashboard
+function handleBuildingClick(meshName) {
+  // Try to match by meshName first, fallback to name without spaces, then to id
+  const found = buildings.value.find(
+    b => b.meshName === meshName ||
+         b.name.replace(/\s/g, '') === meshName ||
+         b.id === meshName
+  )
+  if (found) {
+    selectedBuilding.value = found
+    navigationPath.value = null
+  }
+}
+
+// 地图卡片关闭 / 点击空白 → 清除选中
+function handleClearSelection() {
+  selectedBuilding.value = null
+  navigationPath.value = null
 }
 </script>
 
