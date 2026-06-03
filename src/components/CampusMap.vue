@@ -118,6 +118,7 @@ defineExpose({
 let scene, camera, renderer, controls;
 let animationFrameId;
 let groundPlane;
+let modelMinY = null;
 
 let raycaster, mouse;
 let selectedMesh = null;
@@ -144,7 +145,6 @@ const initThree = () => {
   scene = new THREE.Scene();
   scene.background = new THREE.Color('#eaf2f8');
   scene.fog = new THREE.Fog('#eaf2f8', 600, 2200);
-  scene.add(new THREE.AxesHelper(1000));
 
   // 2. Camera
   camera = new THREE.PerspectiveCamera(75, width / height, 10, 100000);
@@ -166,11 +166,11 @@ const initThree = () => {
   controls.maxPolarAngle = DEBUG_MAP.value ? (Math.PI / 2.2) : Math.PI / 3;
 
   // 5. Lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(100, 100, 50);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  directionalLight.position.set(100, 150, 50);
   scene.add(directionalLight);
 
   // Add dark ground plane
@@ -222,6 +222,11 @@ const initThree = () => {
       groundPlane.scale.set(1.45, 1.45, 1.45);
     }
     
+    // Automatically align to model's lowest point if it loaded first
+    if (modelMinY !== null) {
+      groundPlane.position.y = modelMinY;
+    }
+    
     scene.add(groundPlane);
   });
 
@@ -234,8 +239,8 @@ const initThree = () => {
 
       // Set a clean digital sandbox material
       const defaultMaterial = new THREE.MeshStandardMaterial({
-        color: 0xdddddd,
-        roughness: 0.8,
+        color: 0xffffff,
+        roughness: 0.7,
         side: THREE.DoubleSide
       });
 
@@ -255,6 +260,14 @@ const initThree = () => {
       });
 
       scene.add(model);
+
+      // Automatically align groundPlane Y to the bottom of the building models
+      const box = new THREE.Box3().setFromObject(model);
+      modelMinY = box.min.y - 0.1; // Tiny offset to prevent z-fighting
+      
+      if (groundPlane) {
+        groundPlane.position.y = modelMinY;
+      }
 
       controls.target.set(0, 0, 0);
 
