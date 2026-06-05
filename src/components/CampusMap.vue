@@ -11,10 +11,10 @@
       >
         <div class="popup-header">
           <span class="popup-dot" :class="cardData?.crowdLevel || 'low'"></span>
-          <span class="popup-name">{{ cardData?.name || 'Unknown' }}</span>
+          <span class="popup-name">{{ cardData?.uiName || 'Unknown' }}</span>
           <button class="popup-close" @click="clearSelection">✕</button>
         </div>
-        <div class="popup-subtitle">{{ cardData?.nameZh || '' }}</div>
+        <div class="popup-subtitle">{{ cardData?.uiNameZh || '' }}</div>
         <div class="popup-body">
           <div class="popup-row">
             <el-icon class="popup-icon"><Clock /></el-icon>
@@ -119,6 +119,7 @@ let pointerDownPos = { x: 0, y: 0 };
 // 选中标记
 let selectionMarker = null;
 let highlightBox = null;
+let currentHighlightedBuilding = null;
 
 // ──── 坐标映射工具 ────
 /** 将 buildings 的归一化坐标 (0-1) 转为 3D 世界坐标 */
@@ -212,11 +213,26 @@ function updateHighlightBox(buildingData) {
 }
 
 // ──── 🔧 显示卡片 + 地面标记 + 建筑高亮 ────
-function showCard(buildingData) {
+function showCard(buildingData, targetMesh = null) {
   cardData.value = buildingData;
   cardVisible.value = true;
-  targetWorldPos = mapPosToWorld(buildingData.position.x, buildingData.position.y);
+  
+  let mesh = targetMesh;
+  if (!mesh && buildingData.modelName && scene) {
+    mesh = scene.getObjectByName(buildingData.modelName);
+  }
+
+  if (mesh) {
+    const box = new THREE.Box3().setFromObject(mesh);
+    targetWorldPos = box.getCenter(new THREE.Vector3());
+  } else if (buildingData.position) {
+    targetWorldPos = mapPosToWorld(buildingData.position.x, buildingData.position.y);
+  } else {
+    targetWorldPos = new THREE.Vector3(0, 0, 0);
+  }
+
   updateSelectionMarker(targetWorldPos);
+  // updateHighlightBox 暂时保留，以便支持旧逻辑的地面高亮
   updateHighlightBox(buildingData);
 }
 
@@ -303,42 +319,45 @@ function clearSelection() {
 }
 
 // ──── 🎯 flyToBuilding：根据建筑 ID 找到坐标，镜头飞过去 ────
-const flyToBuilding = (buildingIdOrName) => {
+const flyToBuilding = (buildingName) => {
   if (!scene || !camera || !controls) return;
 
-  // 从 buildings 数据中查找匹配的建筑
-  const search = (buildingIdOrName || '').toString().toLowerCase().replace(/\s/g, '');
-  const building = props.buildings.find(b => {
-    const bid = (b.id || '').toLowerCase().replace(/\s/g, '');
-    const bname = (b.name || '').toLowerCase().replace(/\s/g, '');
-    const bmesh = (b.meshName || '').toLowerCase().replace(/\s/g, '');
-    return bid === search || bname === search || bmesh === search;
-  });
-
-  if (!building) {
-    console.warn('[CampusMap] flyToBuilding: building not found for', buildingIdOrName);
+  const targetBuilding = scene.getObjectByName(buildingName);
+  if (!targetBuilding) {
+    console.warn('[CampusMap] flyToBuilding: building not found for', buildingName);
     return;
   }
 
-  // 显示卡片
-  showCard(building);
+  const buildingInfo = props.buildings.find(b => b.modelName === buildingName);
+  if (buildingInfo) {
+    showCard(buildingInfo, targetBuilding);
+  }
 
-  // 计算建筑在 3D 世界中的位置
-  const worldPos = mapPosToWorld(building.position.x, building.position.y);
+  const box = new THREE.Box3().setFromObject(targetBuilding);
+  const center = box.getCenter(new THREE.Vector3());
 
-  // 镜头飞行动画
-  gsap.to(camera.position, {
-    x: worldPos.x + 200,
-    y: worldPos.y + 350,
-    z: worldPos.z + 250,
-    duration: 1.5,
-    ease: 'power2.inOut'
-  });
+  if (currentHighlightedBuilding) {
+    currentHighlightedBuilding.material.color.setHex(0xdddddd);
+  }
+
+  targetBuilding.material.color.setHex(0x005bac);
+  currentHighlightedBuilding = targetBuilding;
+
+  const offset = new THREE.Vector3(150, 200, 150);
 
   gsap.to(controls.target, {
-    x: worldPos.x,
-    y: worldPos.y,
-    z: worldPos.z,
+    x: center.x,
+    y: center.y,
+    z: center.z,
+    duration: 1.5,
+    ease: 'power2.inOut',
+    onUpdate: () => controls.update()
+  });
+
+  gsap.to(camera.position, {
+    x: center.x + offset.x,
+    y: center.y + offset.y,
+    z: center.z + offset.z,
     duration: 1.5,
     ease: 'power2.inOut'
   });
@@ -599,29 +618,38 @@ const onClick = (event) => {
   // 拖拽操作不触发点击
   if (pointerMoved) return;
 
-  if (!mapContainer.value || !camera || !groundPlane || !raycaster || !mouse) return;
+  if (!mapContainer.value || !camera || !scene || !raycaster || !mouse) return;
 
   const rect = mapContainer.value.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
   raycaster.setFromCamera(mouse, camera);
-  // 检测与地面平面的交点
-  const intersects = raycaster.intersectObject(groundPlane);
 
-  if (intersects.length > 0) {
-    const worldPos = intersects[0].point;
-    const mapPos = worldToMapPos(worldPos);
-    const building = findNearestBuilding(mapPos.x, mapPos.y);
-
-    if (building) {
-      showCard(building);
-      emit('building-click', building.id);
-      return;
+  // 优先检测 3D 模型建筑
+  const intersects = raycaster.intersectObjects(scene.children, true);
+  let clickedMesh = null;
+  for (const intersect of intersects) {
+    const obj = intersect.object;
+    // 忽略地面、标记、高亮框，以及辅助线段
+    if (obj.isMesh && obj !== groundPlane && obj !== selectionMarker && obj !== highlightBox) {
+      if (obj.type !== 'LineSegments' && !obj.name.includes("edge") && !obj.name.includes("Line")) {
+        clickedMesh = obj;
+        break;
+      }
     }
   }
 
-  // 点击了空白处
+  if (clickedMesh) {
+    emit('building-click', clickedMesh.name);
+    const buildingInfo = props.buildings.find(b => b.modelName === clickedMesh.name);
+    if (buildingInfo) {
+      showCard(buildingInfo, clickedMesh);
+    }
+    return;
+  }
+
+  // 若没有点中 3D 建筑，点击了空白处/地面
   clearSelection();
 };
 

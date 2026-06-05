@@ -30,139 +30,11 @@ import { ref, reactive } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import CampusMap from './components/CampusMap.vue'
 import Dashboard from './components/Dashboard.vue'
+import buildingsData from './assets/buildings.json'
 
 const campusMapRef = ref(null)
 
-const buildings = ref([
-  {
-    id: 'library',
-    meshName: 'SipingLibrary',
-    name: 'Siping Library',
-    nameZh: '四平路校区图书馆',
-    category: 'academic',
-    icon: 'Reading',
-    position: { x: 0.3, y: 0.45 },
-    description: 'The main library of Tongji University Siping Campus, housing over 3 million volumes across 12 floors.',
-    openTime: '07:30 - 22:30',
-    floors: 12,
-    area: '36,000 m²',
-    crowdLevel: 'medium',
-    crowdPercent: 55,
-    dailyVisitors: 2847
-  },
-  {
-    id: 'zhonghe',
-    meshName: 'ZhongheBuilding',
-    name: 'Zhonghe Building',
-    nameZh: '衷和楼',
-    category: 'academic',
-    icon: 'OfficeBuilding',
-    position: { x: 0.55, y: 0.35 },
-    description: 'The iconic comprehensive teaching building, featuring modern lecture halls and panoramic city views from the top floor.',
-    openTime: '06:00 - 22:00',
-    floors: 20,
-    area: '45,000 m²',
-    crowdLevel: 'high',
-    crowdPercent: 82,
-    dailyVisitors: 5621
-  },
-  {
-    id: 'auditorium',
-    meshName: 'GrandAuditorium',
-    name: 'Grand Auditorium',
-    nameZh: '大礼堂',
-    category: 'culture',
-    icon: 'Mic',
-    position: { x: 0.4, y: 0.6 },
-    description: 'The historic 1,200-seat auditorium hosting major university ceremonies and cultural performances since 1961.',
-    openTime: '08:00 - 21:00',
-    floors: 2,
-    area: '8,000 m²',
-    crowdLevel: 'low',
-    crowdPercent: 18,
-    dailyVisitors: 423
-  },
-  {
-    id: 'south',
-    meshName: 'SouthBuilding',
-    name: 'South Teaching Building',
-    nameZh: '南楼',
-    category: 'academic',
-    icon: 'School',
-    position: { x: 0.25, y: 0.55 },
-    description: 'Main teaching building for science and engineering courses with 80+ classrooms.',
-    openTime: '06:30 - 22:00',
-    floors: 6,
-    area: '20,000 m²',
-    crowdLevel: 'high',
-    crowdPercent: 78,
-    dailyVisitors: 4102
-  },
-  {
-    id: 'north',
-    meshName: 'NorthBuilding',
-    name: 'North Teaching Building',
-    nameZh: '北楼',
-    category: 'academic',
-    icon: 'School',
-    position: { x: 0.5, y: 0.55 },
-    description: 'Teaching building primarily for humanities and social sciences departments.',
-    openTime: '06:30 - 22:00',
-    floors: 6,
-    area: '18,000 m²',
-    crowdLevel: 'medium',
-    crowdPercent: 48,
-    dailyVisitors: 2156
-  },
-  {
-    id: 'ruian',
-    meshName: 'RuianBuilding',
-    name: 'Ruian Building',
-    nameZh: '瑞安楼',
-    category: 'admin',
-    icon: 'Stamp',
-    position: { x: 0.6, y: 0.5 },
-    description: 'Administration and research center, housing key university management offices and conference facilities.',
-    openTime: '08:00 - 17:30',
-    floors: 10,
-    area: '15,000 m²',
-    crowdLevel: 'medium',
-    crowdPercent: 42,
-    dailyVisitors: 980
-  },
-  {
-    id: 'xueyuan',
-    meshName: 'XueyuanCanteen',
-    name: 'Xueyuan Canteen',
-    nameZh: '学苑食堂',
-    category: 'dining',
-    icon: 'Food',
-    position: { x: 0.35, y: 0.7 },
-    description: 'The largest student canteen on campus, serving a wide variety of Chinese and international cuisine.',
-    openTime: '06:30 - 09:00 / 11:00 - 13:00 / 17:00 - 19:00',
-    floors: 3,
-    area: '12,000 m²',
-    crowdLevel: 'high',
-    crowdPercent: 91,
-    dailyVisitors: 7892
-  },
-  {
-    id: 'gym',
-    meshName: 'SportsComplex',
-    name: 'Sports Complex',
-    nameZh: '综合体育馆',
-    category: 'sports',
-    icon: 'TrophyBase',
-    position: { x: 0.7, y: 0.65 },
-    description: 'Modern indoor sports facility with basketball courts, swimming pool, and fitness center.',
-    openTime: '08:00 - 22:00',
-    floors: 4,
-    area: '18,000 m²',
-    crowdLevel: 'medium',
-    crowdPercent: 38,
-    dailyVisitors: 1654
-  }
-])
+const buildings = ref(buildingsData)
 
 const selectedBuilding = ref(null)
 const navigationPath = ref(null)
@@ -183,8 +55,8 @@ setInterval(() => {
 // Sidebar click → fly to building on map
 function handleSelectBuilding(building) {
   selectedBuilding.value = building
-  if (building && campusMapRef.value) {
-    campusMapRef.value.flyToBuilding(building.id)
+  if (building && campusMapRef.value && building.modelName) {
+    campusMapRef.value.flyToBuilding(building.modelName)
   } else if (!building && campusMapRef.value) {
     campusMapRef.value.clearSelection()
   }
@@ -194,8 +66,8 @@ function handleSelectBuilding(building) {
 // Search by text query
 function handleSearch(query) {
   const found = buildings.value.find(
-    b => b.name.toLowerCase().includes(query.toLowerCase()) ||
-         b.nameZh.includes(query)
+    b => (b.uiName && b.uiName.toLowerCase().includes(query.toLowerCase())) ||
+         (b.uiNameZh && b.uiNameZh.includes(query))
   )
   if (found) {
     handleSelectBuilding(found)
@@ -205,8 +77,8 @@ function handleSearch(query) {
 // Voice search result
 function handleVoiceSearch(buildingName) {
   const found = buildings.value.find(
-    b => b.name.toLowerCase().includes(buildingName.toLowerCase()) ||
-         b.nameZh.includes(buildingName)
+    b => (b.uiName && b.uiName.toLowerCase().includes(buildingName.toLowerCase())) ||
+         (b.uiNameZh && b.uiNameZh.includes(buildingName))
   )
   if (found) {
     handleSelectBuilding(found)
@@ -215,11 +87,9 @@ function handleVoiceSearch(buildingName) {
 
 // Map click → update selected building in sidebar & dashboard
 function handleBuildingClick(meshName) {
-  // Try to match by meshName first, fallback to name without spaces, then to id
+  // Use modelName to find the building
   const found = buildings.value.find(
-    b => b.meshName === meshName ||
-         b.name.replace(/\s/g, '') === meshName ||
-         b.id === meshName
+    b => b.modelName === meshName
   )
   if (found) {
     selectedBuilding.value = found

@@ -53,8 +53,8 @@
       <div class="selected-info" v-if="selectedBuilding">
         <div class="selected-header">
           <span class="selected-dot" :class="selectedBuilding.crowdLevel"></span>
-          <span class="selected-name">{{ selectedBuilding.name }}</span>
-          <span class="selected-name-zh">{{ selectedBuilding.nameZh }}</span>
+          <span class="selected-name">{{ selectedBuilding.uiName }}</span>
+          <span class="selected-name-zh">{{ selectedBuilding.uiNameZh }}</span>
         </div>
 
         <div class="selected-divider"></div>

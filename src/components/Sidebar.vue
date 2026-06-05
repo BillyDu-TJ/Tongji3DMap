@@ -67,8 +67,8 @@
             <div class="card-title-row">
               <el-icon class="card-icon"><component :is="building.icon" /></el-icon>
               <div class="card-info">
-                <span class="card-name">{{ building.name }}</span>
-                <span class="card-name-zh">{{ building.nameZh }}</span>
+                <span class="card-name">{{ building.uiName }}</span>
+                <span class="card-name-zh">{{ building.uiNameZh }}</span>
               </div>
             </div>
             <div class="card-meta">
@@ -130,7 +130,7 @@ const filteredBuildings = computed(() => {
   if (searchQuery.value.trim()) {
     const q = searchQuery.value.toLowerCase()
     result = result.filter(
-      b => b.name.toLowerCase().includes(q) || b.nameZh.includes(q)
+      b => (b.uiName && b.uiName.toLowerCase().includes(q)) || (b.uiNameZh && b.uiNameZh.includes(q))
     )
   }
   return result
