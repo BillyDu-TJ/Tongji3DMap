@@ -84,6 +84,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import gsap from 'gsap';
 import { Clock, UserFilled, OfficeBuilding } from '@element-plus/icons-vue';
+import defaultTransform from '../assets/transform.json';
 
 const DEBUG_MAP = ref(false);
 
@@ -336,15 +337,32 @@ defineExpose({
 });
 
 // ──── 保存变换 ────
-const saveMapTransform = () => {
+const saveMapTransform = async () => {
   if (!groundPlane) return;
   const transform = {
     position: { x: groundPlane.position.x, y: groundPlane.position.y, z: groundPlane.position.z },
     scale: { x: groundPlane.scale.x, y: groundPlane.scale.y, z: groundPlane.scale.z },
     rotationZ: groundPlane.rotation.z
   };
+  
+  // 仍然保存到 localStorage 备用
   localStorage.setItem('campusMapTransform', JSON.stringify(transform));
-  alert('Map transform saved!');
+  
+  try {
+    const response = await fetch('/api/save-transform', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(transform)
+    });
+    
+    if (response.ok) {
+      alert('Map transform successfully written to source code!');
+    } else {
+      alert('Failed to write to source code. (Only works in Vite dev server)');
+    }
+  } catch (err) {
+    alert('Failed to connect to dev server. Transform saved locally only.');
+  }
 };
 
 const toggleDebug = () => {
@@ -422,20 +440,23 @@ const initThree = () => {
     groundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     groundPlane.rotation.x = -Math.PI / 2;
 
+    // 优先使用新增加的 json 默认值（可以被 localStorage 覆盖，方便本机测试）
+    const applyTransform = (t) => {
+      groundPlane.position.set(t.position.x, t.position.y, t.position.z);
+      groundPlane.scale.set(t.scale.x, t.scale.y, t.scale.z);
+      groundPlane.rotation.z = t.rotationZ || 0;
+    };
+
     const savedStr = localStorage.getItem('campusMapTransform');
     if (savedStr) {
       try {
         const saved = JSON.parse(savedStr);
-        groundPlane.position.set(saved.position.x, saved.position.y, saved.position.z);
-        groundPlane.scale.set(saved.scale.x, saved.scale.y, saved.scale.z);
-        groundPlane.rotation.z = saved.rotationZ;
+        applyTransform(saved);
       } catch (e) {
-        groundPlane.position.set(190, -1, -50);
-        groundPlane.scale.set(1.45, 1.45, 1.45);
+        applyTransform(defaultTransform);
       }
     } else {
-      groundPlane.position.set(190, -1, -50);
-      groundPlane.scale.set(1.45, 1.45, 1.45);
+      applyTransform(defaultTransform);
     }
 
     if (modelMinY !== null) groundPlane.position.y = modelMinY;
