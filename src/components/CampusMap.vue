@@ -118,7 +118,6 @@ let pointerDownPos = { x: 0, y: 0 };
 
 // 选中标记
 let selectionMarker = null;
-let highlightBox = null;
 let currentHighlightedBuilding = null;
 
 // ──── 坐标映射工具 ────
@@ -161,58 +160,7 @@ function findNearestBuilding(normX, normY) {
   return bestDist < threshold * threshold ? best : null;
 }
 
-// ──── 🔧 建筑高亮方块 ────
-function ensureHighlightBox() {
-  if (highlightBox || !scene) return;
-  const geo = new THREE.BoxGeometry(60, 100, 60);
-  const mat = new THREE.MeshBasicMaterial({
-    color: 0x005A9C,
-    transparent: true,
-    opacity: 0.28,
-    depthWrite: false
-  });
-  highlightBox = new THREE.Mesh(geo, mat);
-  highlightBox.renderOrder = 500;
-  highlightBox.visible = false;
-  scene.add(highlightBox);
-
-  // 边缘发光线框
-  const edgeGeo = new THREE.EdgesGeometry(geo);
-  const edgeMat = new THREE.LineBasicMaterial({
-    color: 0x4a90d9,
-    transparent: true,
-    opacity: 0.7,
-    depthTest: false
-  });
-  const edgeLine = new THREE.LineSegments(edgeGeo, edgeMat);
-  edgeLine.renderOrder = 501;
-  edgeLine.visible = false;
-  highlightBox.add(edgeLine);
-  highlightBox.userData.edgeLine = edgeLine;
-}
-
-function updateHighlightBox(buildingData) {
-  ensureHighlightBox();
-  if (!highlightBox) return;
-
-  if (buildingData) {
-    const worldPos = mapPosToWorld(buildingData.position.x, buildingData.position.y);
-    const height = Math.max(30, (buildingData.floors || 5) * 14);
-    highlightBox.scale.set(1, height / 100, 1);
-    highlightBox.position.set(worldPos.x, worldPos.y + height / 2, worldPos.z);
-    highlightBox.visible = true;
-    if (highlightBox.userData.edgeLine) {
-      highlightBox.userData.edgeLine.visible = true;
-    }
-  } else {
-    highlightBox.visible = false;
-    if (highlightBox.userData.edgeLine) {
-      highlightBox.userData.edgeLine.visible = false;
-    }
-  }
-}
-
-// ──── 🔧 显示卡片 + 地面标记 + 建筑高亮 ────
+// ──── 🔧 显示卡片 + 地面标记 ────
 function showCard(buildingData, targetMesh = null) {
   cardData.value = buildingData;
   cardVisible.value = true;
@@ -232,8 +180,6 @@ function showCard(buildingData, targetMesh = null) {
   }
 
   updateSelectionMarker(targetWorldPos);
-  // updateHighlightBox 暂时保留，以便支持旧逻辑的地面高亮
-  updateHighlightBox(buildingData);
 }
 
 // ──── 🔧 隐藏卡片 + 地面标记 + 建筑高亮 ────
@@ -243,7 +189,6 @@ function hideCard() {
   cardPosition.value = null;
   targetWorldPos = null;
   updateSelectionMarker(null);
-  updateHighlightBox(null);
 }
 
 // ──── 🔧 地面选中标记 ────
@@ -337,7 +282,7 @@ const flyToBuilding = (buildingName) => {
   const center = box.getCenter(new THREE.Vector3());
 
   if (currentHighlightedBuilding) {
-    currentHighlightedBuilding.material.color.setHex(0xdddddd);
+    currentHighlightedBuilding.material.color.setHex(0xffffff);
   }
 
   targetBuilding.material.color.setHex(0x005bac);
@@ -513,8 +458,8 @@ const initThree = () => {
 
       model.traverse((child) => {
         if (child.isMesh) {
-          child.material = defaultMaterial;
-          child.userData.originalMaterial = defaultMaterial;
+          child.material = defaultMaterial.clone();
+          child.userData.originalMaterial = child.material;
 
           const edges = new THREE.EdgesGeometry(child.geometry);
           const line = new THREE.LineSegments(
@@ -632,7 +577,7 @@ const onClick = (event) => {
   for (const intersect of intersects) {
     const obj = intersect.object;
     // 忽略地面、标记、高亮框，以及辅助线段
-    if (obj.isMesh && obj !== groundPlane && obj !== selectionMarker && obj !== highlightBox) {
+    if (obj.isMesh && obj !== groundPlane && obj !== selectionMarker) {
       if (obj.type !== 'LineSegments' && !obj.name.includes("edge") && !obj.name.includes("Line")) {
         clickedMesh = obj;
         break;
@@ -679,17 +624,6 @@ const cleanupThree = () => {
     if (selectionMarker.geometry) selectionMarker.geometry.dispose();
     if (selectionMarker.material) selectionMarker.material.dispose();
     selectionMarker = null;
-  }
-
-  if (highlightBox) {
-    if (highlightBox.userData.edgeLine) {
-      if (highlightBox.userData.edgeLine.geometry) highlightBox.userData.edgeLine.geometry.dispose();
-      if (highlightBox.userData.edgeLine.material) highlightBox.userData.edgeLine.material.dispose();
-      highlightBox.userData.edgeLine = null;
-    }
-    if (highlightBox.geometry) highlightBox.geometry.dispose();
-    if (highlightBox.material) highlightBox.material.dispose();
-    highlightBox = null;
   }
 
   if (scene) {
