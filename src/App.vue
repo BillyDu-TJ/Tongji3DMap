@@ -6,6 +6,7 @@
       @select-building="handleSelectBuilding"
       @search="handleSearch"
       @voice-search="handleVoiceSearch"
+      @start-navigation="handleStartNavigation"
     />
     <main class="main-area">
       <CampusMap
@@ -52,6 +53,45 @@ setInterval(() => {
   stats.activeUsers = 300 + Math.floor(Math.random() * 100)
 }, 3000)
 
+function normalizeBuildingName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s_·.,，。!?！？、:：;；"'“”‘’()（）-]/g, '')
+}
+
+function getBuildingNameCandidates(building) {
+  return [
+    building.uiNameZh,
+    building.uiName,
+    building.modelName,
+    building.modelName?.replace(/_/g, ' ')
+  ].filter(Boolean)
+}
+
+function findBuildingByName(queryText) {
+  const query = normalizeBuildingName(queryText)
+  if (!query) return null
+
+  const candidates = buildings.value.flatMap(building =>
+    getBuildingNameCandidates(building).map(name => ({
+      building,
+      normalizedName: normalizeBuildingName(name)
+    }))
+  ).filter(item => item.normalizedName)
+
+  const exact = candidates.find(item => item.normalizedName === query)
+  if (exact) return exact.building
+
+  const queryContainsName = candidates
+    .filter(item => query.includes(item.normalizedName))
+    .sort((a, b) => b.normalizedName.length - a.normalizedName.length)
+  if (queryContainsName.length) return queryContainsName[0].building
+
+  const partialMatches = candidates.filter(item => item.normalizedName.includes(query))
+  const uniqueMatches = [...new Map(partialMatches.map(item => [item.building.id, item.building])).values()]
+  return uniqueMatches.length === 1 ? uniqueMatches[0] : null
+}
+
 // Sidebar click → fly to building on map
 function handleSelectBuilding(building) {
   selectedBuilding.value = building
@@ -65,10 +105,7 @@ function handleSelectBuilding(building) {
 
 // Search by text query
 function handleSearch(query) {
-  const found = buildings.value.find(
-    b => (b.uiName && b.uiName.toLowerCase().includes(query.toLowerCase())) ||
-         (b.uiNameZh && b.uiNameZh.includes(query))
-  )
+  const found = findBuildingByName(query)
   if (found) {
     handleSelectBuilding(found)
   }
@@ -76,10 +113,7 @@ function handleSearch(query) {
 
 // Voice search result
 function handleVoiceSearch(buildingName) {
-  const found = buildings.value.find(
-    b => (b.uiName && b.uiName.toLowerCase().includes(buildingName.toLowerCase())) ||
-         (b.uiNameZh && b.uiNameZh.includes(buildingName))
-  )
+  const found = findBuildingByName(buildingName)
   if (found) {
     handleSelectBuilding(found)
   }
@@ -101,6 +135,14 @@ function handleBuildingClick(meshName) {
 function handleClearSelection() {
   selectedBuilding.value = null
   navigationPath.value = null
+}
+
+function handleStartNavigation() {
+  selectedBuilding.value = null
+  navigationPath.value = null
+  if (campusMapRef.value) {
+    campusMapRef.value.startNavigation()
+  }
 }
 </script>
 

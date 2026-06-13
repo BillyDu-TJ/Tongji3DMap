@@ -2,6 +2,16 @@
   <div class="wrapper">
     <div ref="mapContainer" class="map-container"></div>
 
+    <div v-if="navigationMode" class="navigation-panel">
+      <div class="navigation-title">导航模式</div>
+      <div class="navigation-text">{{ navigationHint }}</div>
+      <div v-if="routeDistance > 0" class="navigation-distance">
+        预计步行距离：{{ routeDistance }} m
+      </div>
+      <div v-if="routeModeText" class="navigation-mode-text">{{ routeModeText }}</div>
+      <button class="navigation-cancel" @click="cancelNavigation">退出导航</button>
+    </div>
+
     <!-- 交互式建筑信息卡片 -->
     <Transition name="card">
       <div
@@ -49,7 +59,7 @@
       </div>
     </Transition>
 
-    <div class="controls-hint" v-show="!DEBUG_MAP">
+    <div class="controls-hint" v-show="!DEBUG_MAP && !navigationMode">
       <div class="hint-item">
         <span class="hint-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>
         <span class="hint-label">平移视野</span>
@@ -102,6 +112,11 @@ const mapContainer = ref(null);
 const cardVisible = ref(false);
 const cardData = ref(null);
 const cardPosition = ref(null);
+const navigationMode = ref(false);
+const navigationStep = ref('start');
+const navigationHint = ref('');
+const routeDistance = ref(0);
+const routeModeText = ref('');
 
 // ──── Three.js 变量 ────
 let scene, camera, renderer, controls;
@@ -120,6 +135,42 @@ let pointerDownPos = { x: 0, y: 0 };
 // 选中标记
 let selectionMarker = null;
 let currentHighlightedBuilding = null;
+let navigationStart = null;
+let navigationEnd = null;
+let navigationMarkers = [];
+let navigationRouteMesh = null;
+let walkingMarker = null;
+let walkingTimeline = null;
+let loadedCampusModel = null;
+let navigationObstacleCache = null;
+let mapPixelData = null;
+let navigationGridCache = null;
+const GRID_SIZE = 90;
+const BUILDING_PADDING_CELLS = 2;
+const BUILDING_HIGHLIGHT_COLOR = new THREE.Color(0x005bac);
+const BUILDING_HIGHLIGHT_EMISSIVE = new THREE.Color(0x00345e);
+const BUILDING_NAMES = new Set([
+  'South_Teaching_Building',
+  'North_Teaching_Building',
+  'Grand_Auditorium',
+  'Ruian_Building',
+  'Xueyuan_Canteen',
+  'Playground',
+  'Zhonghe_Building',
+  'Main_Gate',
+  'Southwest1_Dorm',
+  'Civil_Engineering_Building',
+  'German_Library',
+  'Xiyuan_Canteen',
+  'Administration_Building',
+  'Yifu_Building',
+  'Sino-French_Center',
+  '129_Center',
+  'PE_Center',
+  'Sino-German_Center',
+  'Beiyuan_Canteen',
+  'Library'
+]);
 
 // ──── 坐标映射工具 ────
 /** 将 buildings 的归一化坐标 (0-1) 转为 3D 世界坐标 */
@@ -127,8 +178,8 @@ function mapPosToWorld(normX, normY) {
   if (!groundPlane) return new THREE.Vector3(0, 0, 0);
   groundPlane.updateMatrixWorld();
   // 地图平面局部坐标：X 从左到右，Y 从上到下
-  const localX = (normX - 0.5) * BASE_WIDTH * groundPlane.scale.x;
-  const localY = (0.5 - normY) * (BASE_WIDTH / imgAspectRatio) * groundPlane.scale.y;
+  const localX = (normX - 0.5) * BASE_WIDTH;
+  const localY = (0.5 - normY) * (BASE_WIDTH / imgAspectRatio);
   const localPos = new THREE.Vector3(localX, localY, 0);
   return localPos.applyMatrix4(groundPlane.matrixWorld);
 }
@@ -138,8 +189,8 @@ function worldToMapPos(worldPos) {
   if (!groundPlane) return { x: 0.5, y: 0.5 };
   const invMatrix = new THREE.Matrix4().copy(groundPlane.matrixWorld).invert();
   const localPos = worldPos.clone().applyMatrix4(invMatrix);
-  const normX = localPos.x / (BASE_WIDTH * groundPlane.scale.x) + 0.5;
-  const normY = 0.5 - localPos.y / ((BASE_WIDTH / imgAspectRatio) * groundPlane.scale.y);
+  const normX = localPos.x / BASE_WIDTH + 0.5;
+  const normY = 0.5 - localPos.y / (BASE_WIDTH / imgAspectRatio);
   return { x: Math.max(0, Math.min(1, normX)), y: Math.max(0, Math.min(1, normY)) };
 }
 
@@ -159,6 +210,408 @@ function findNearestBuilding(normX, normY) {
   // 距离阈值：超过此距离认为没点到建筑
   const threshold = 0.12;
   return bestDist < threshold * threshold ? best : null;
+}
+
+function getGroundClickPosition(event) {
+  if (!mapContainer.value || !camera || !groundPlane || !raycaster || !mouse) return null;
+
+  const rect = mapContainer.value.getBoundingClientRect();
+  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObject(groundPlane, false);
+  if (!hits.length) return null;
+
+  return {
+    world: hits[0].point.clone(),
+    map: worldToMapPos(hits[0].point)
+  };
+}
+
+function distanceBetweenMapPoints(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function estimateRouteDistance(points) {
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    total += distanceBetweenMapPoints(points[index - 1], points[index]);
+  }
+  return Math.round(total * BASE_WIDTH);
+}
+
+function createMapPixelData(image) {
+  if (!image) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    data: imageData.data
+  };
+}
+
+function getMapPixel(normX, normY) {
+  if (!mapPixelData) return null;
+
+  const px = Math.max(0, Math.min(mapPixelData.width - 1, Math.round(normX * (mapPixelData.width - 1))));
+  const py = Math.max(0, Math.min(mapPixelData.height - 1, Math.round(normY * (mapPixelData.height - 1))));
+  const index = (py * mapPixelData.width + px) * 4;
+  return {
+    r: mapPixelData.data[index],
+    g: mapPixelData.data[index + 1],
+    b: mapPixelData.data[index + 2]
+  };
+}
+
+function estimateMapRoadCost(normX, normY) {
+  const pixel = getMapPixel(normX, normY);
+  if (!pixel) return 1.8;
+
+  const { r, g, b } = pixel;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const saturation = max - min;
+  const brightness = (r + g + b) / 3;
+
+  const isWhiteOrGrayRoad = brightness > 205 && saturation < 38;
+  const isPaleCampusPath = r > 218 && g > 208 && b > 178 && saturation < 70;
+  const isOrangeMainRoad = r > 220 && g > 155 && g < 215 && b < 170;
+  const isGreenArea = g > r + 18 && g > b + 8;
+  const isWater = b > r + 18 && b > g + 8;
+  const isBuildingFill = r > 185 && g > 172 && b > 155 && brightness < 220 && saturation < 48;
+
+  if (isWhiteOrGrayRoad || isPaleCampusPath) return 1;
+  if (isOrangeMainRoad) return 1.35;
+  if (isGreenArea || isWater) return 4.8;
+  if (isBuildingFill) return 3.6;
+  return 2.2;
+}
+
+function isNavigationObstacle(object) {
+  if (!object || object.type === 'LineSegments') return false;
+  if (BUILDING_NAMES.has(object.name)) return true;
+  return Boolean(object.parent && BUILDING_NAMES.has(object.parent.name));
+}
+
+function getBuildingObstacleRects() {
+  if (!loadedCampusModel || !groundPlane) return [];
+  if (navigationObstacleCache) return navigationObstacleCache;
+
+  const obstacleByName = new Map();
+  loadedCampusModel.updateMatrixWorld(true);
+
+  loadedCampusModel.traverse((object) => {
+    if (!object.isMesh || !isNavigationObstacle(object)) return;
+
+    const rootName = BUILDING_NAMES.has(object.name) ? object.name : object.parent?.name;
+    if (!rootName || rootName === 'Ways') return;
+
+    const box = new THREE.Box3().setFromObject(object);
+    const corners = [
+      new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.max.z)
+    ].map(worldToMapPos);
+
+    const rect = {
+      name: rootName,
+      minX: Math.min(...corners.map(point => point.x)),
+      maxX: Math.max(...corners.map(point => point.x)),
+      minY: Math.min(...corners.map(point => point.y)),
+      maxY: Math.max(...corners.map(point => point.y))
+    };
+
+    const existing = obstacleByName.get(rootName);
+    if (existing) {
+      existing.minX = Math.min(existing.minX, rect.minX);
+      existing.maxX = Math.max(existing.maxX, rect.maxX);
+      existing.minY = Math.min(existing.minY, rect.minY);
+      existing.maxY = Math.max(existing.maxY, rect.maxY);
+    } else {
+      obstacleByName.set(rootName, rect);
+    }
+  });
+
+  navigationObstacleCache = [...obstacleByName.values()].filter(rect => (
+    rect.maxX >= 0 && rect.minX <= 1 && rect.maxY >= 0 && rect.minY <= 1
+  ));
+  return navigationObstacleCache;
+}
+
+function createNavigationGrid() {
+  if (navigationGridCache) return navigationGridCache;
+
+  const width = GRID_SIZE;
+  const height = Math.max(40, Math.round(GRID_SIZE / imgAspectRatio));
+  const cells = Array.from({ length: height }, () => (
+    Array.from({ length: width }, () => ({ blocked: false, cost: 1 }))
+  ));
+
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      const x = col / (width - 1);
+      const y = row / (height - 1);
+      cells[row][col].cost = estimateMapRoadCost(x, y);
+    }
+  }
+
+  for (const rect of getBuildingObstacleRects()) {
+    const minCol = Math.max(0, Math.floor(rect.minX * (width - 1)) - BUILDING_PADDING_CELLS);
+    const maxCol = Math.min(width - 1, Math.ceil(rect.maxX * (width - 1)) + BUILDING_PADDING_CELLS);
+    const minRow = Math.max(0, Math.floor(rect.minY * (height - 1)) - BUILDING_PADDING_CELLS);
+    const maxRow = Math.min(height - 1, Math.ceil(rect.maxY * (height - 1)) + BUILDING_PADDING_CELLS);
+
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let col = minCol; col <= maxCol; col += 1) {
+        cells[row][col].blocked = true;
+      }
+    }
+  }
+
+  navigationGridCache = { width, height, cells };
+  return navigationGridCache;
+}
+
+function mapPointToGrid(point, grid) {
+  return {
+    col: Math.max(0, Math.min(grid.width - 1, Math.round(point.x * (grid.width - 1)))),
+    row: Math.max(0, Math.min(grid.height - 1, Math.round(point.y * (grid.height - 1))))
+  };
+}
+
+function gridCellToMapPoint(cell, grid) {
+  return {
+    x: cell.col / (grid.width - 1),
+    y: cell.row / (grid.height - 1)
+  };
+}
+
+function cellKey(cell) {
+  return `${cell.col},${cell.row}`;
+}
+
+function findNearestWalkableCell(cell, grid) {
+  if (!grid.cells[cell.row][cell.col].blocked) return cell;
+
+  const maxRadius = Math.max(grid.width, grid.height);
+  for (let radius = 1; radius < maxRadius; radius += 1) {
+    let best = null;
+    let bestCost = Infinity;
+    for (let row = Math.max(0, cell.row - radius); row <= Math.min(grid.height - 1, cell.row + radius); row += 1) {
+      for (let col = Math.max(0, cell.col - radius); col <= Math.min(grid.width - 1, cell.col + radius); col += 1) {
+        if (Math.abs(row - cell.row) !== radius && Math.abs(col - cell.col) !== radius) continue;
+        if (grid.cells[row][col].blocked) continue;
+        const distance = Math.hypot(col - cell.col, row - cell.row);
+        const score = distance + grid.cells[row][col].cost;
+        if (score < bestCost) {
+          best = { col, row };
+          bestCost = score;
+        }
+      }
+    }
+    if (best) return best;
+  }
+
+  return cell;
+}
+
+function heuristic(a, b) {
+  return Math.hypot(a.col - b.col, a.row - b.row);
+}
+
+function findLowestOpenCell(openSet, fScore) {
+  let bestKey = null;
+  let bestScore = Infinity;
+  for (const key of openSet) {
+    const score = fScore.get(key) ?? Infinity;
+    if (score < bestScore) {
+      bestKey = key;
+      bestScore = score;
+    }
+  }
+  return bestKey;
+}
+
+function parseCellKey(key) {
+  const [col, row] = key.split(',').map(Number);
+  return { col, row };
+}
+
+function reconstructGridPath(cameFrom, currentKey) {
+  const path = [parseCellKey(currentKey)];
+  let cursor = currentKey;
+  while (cameFrom.has(cursor)) {
+    cursor = cameFrom.get(cursor);
+    path.unshift(parseCellKey(cursor));
+  }
+  return path;
+}
+
+function simplifyRoutePoints(points) {
+  if (points.length <= 2) return points;
+
+  const simplified = [points[0]];
+  let previousDirection = null;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const next = points[index + 1];
+    const direction = {
+      x: Math.sign(next.x - previous.x),
+      y: Math.sign(next.y - previous.y)
+    };
+    if (!previousDirection || direction.x !== previousDirection.x || direction.y !== previousDirection.y) {
+      simplified.push(current);
+      previousDirection = direction;
+    }
+  }
+  simplified.push(points[points.length - 1]);
+  return simplified;
+}
+
+function findAStarRoute(startPoint, endPoint) {
+  const grid = createNavigationGrid();
+  const startCell = findNearestWalkableCell(mapPointToGrid(startPoint, grid), grid);
+  const endCell = findNearestWalkableCell(mapPointToGrid(endPoint, grid), grid);
+  const startKey = cellKey(startCell);
+  const endKey = cellKey(endCell);
+  const openSet = new Set([startKey]);
+  const cameFrom = new Map();
+  const gScore = new Map([[startKey, 0]]);
+  const fScore = new Map([[startKey, heuristic(startCell, endCell)]]);
+  const directions = [
+    { col: 1, row: 0, weight: 1 },
+    { col: -1, row: 0, weight: 1 },
+    { col: 0, row: 1, weight: 1 },
+    { col: 0, row: -1, weight: 1 },
+    { col: 1, row: 1, weight: Math.SQRT2 },
+    { col: 1, row: -1, weight: Math.SQRT2 },
+    { col: -1, row: 1, weight: Math.SQRT2 },
+    { col: -1, row: -1, weight: Math.SQRT2 }
+  ];
+
+  while (openSet.size) {
+    const currentKey = findLowestOpenCell(openSet, fScore);
+    if (!currentKey) break;
+    if (currentKey === endKey) {
+      const cells = reconstructGridPath(cameFrom, currentKey);
+      const points = cells.map(cell => gridCellToMapPoint(cell, grid));
+      return [startPoint, ...simplifyRoutePoints(points), endPoint];
+    }
+
+    openSet.delete(currentKey);
+    const current = parseCellKey(currentKey);
+
+    for (const direction of directions) {
+      const neighbor = {
+        col: current.col + direction.col,
+        row: current.row + direction.row
+      };
+      if (neighbor.col < 0 || neighbor.col >= grid.width || neighbor.row < 0 || neighbor.row >= grid.height) continue;
+      if (grid.cells[neighbor.row][neighbor.col].blocked) continue;
+      if (direction.col !== 0 && direction.row !== 0) {
+        const horizontalBlocked = grid.cells[current.row][neighbor.col].blocked;
+        const verticalBlocked = grid.cells[neighbor.row][current.col].blocked;
+        if (horizontalBlocked || verticalBlocked) continue;
+      }
+
+      const neighborKey = cellKey(neighbor);
+      const movementCost = direction.weight * grid.cells[neighbor.row][neighbor.col].cost;
+      const tentativeGScore = (gScore.get(currentKey) ?? Infinity) + movementCost;
+      if (tentativeGScore >= (gScore.get(neighborKey) ?? Infinity)) continue;
+
+      cameFrom.set(neighborKey, currentKey);
+      gScore.set(neighborKey, tentativeGScore);
+      fScore.set(neighborKey, tentativeGScore + heuristic(neighbor, endCell));
+      openSet.add(neighborKey);
+    }
+  }
+
+  return null;
+}
+
+function snapMapPointToWalkable(point) {
+  if (!loadedCampusModel || !groundPlane) return point;
+  const grid = createNavigationGrid();
+  return gridCellToMapPoint(findNearestWalkableCell(mapPointToGrid(point, grid), grid), grid);
+}
+
+function isKnownBuildingName(name) {
+  return Boolean(name && (
+    BUILDING_NAMES.has(name) ||
+    props.buildings.some(building => building.modelName === name)
+  ));
+}
+
+function findBuildingRootObject(object) {
+  let current = object;
+  while (current && current !== scene) {
+    if (isKnownBuildingName(current.name)) return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+function applyMaterialHighlight(material, shouldHighlight) {
+  if (!material?.color) return;
+  material.userData ||= {};
+  if (!material.userData.originalColor) {
+    material.userData.originalColor = material.color.clone();
+  }
+  if (material.emissive && !material.userData.originalEmissive) {
+    material.userData.originalEmissive = material.emissive.clone();
+  }
+
+  if (shouldHighlight) {
+    material.color.copy(BUILDING_HIGHLIGHT_COLOR);
+    if (material.emissive) material.emissive.copy(BUILDING_HIGHLIGHT_EMISSIVE);
+  } else {
+    material.color.copy(material.userData.originalColor);
+    if (material.emissive && material.userData.originalEmissive) {
+      material.emissive.copy(material.userData.originalEmissive);
+    }
+  }
+  material.needsUpdate = true;
+}
+
+function setBuildingHighlighted(buildingObject, shouldHighlight) {
+  if (!buildingObject) return;
+  buildingObject.traverse((object) => {
+    if (!object.isMesh || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach(material => applyMaterialHighlight(material, shouldHighlight));
+  });
+}
+
+function clearBuildingHighlight() {
+  if (!currentHighlightedBuilding) return;
+  setBuildingHighlighted(currentHighlightedBuilding, false);
+  currentHighlightedBuilding = null;
+}
+
+function highlightBuilding(buildingObject) {
+  if (!buildingObject) return;
+  if (currentHighlightedBuilding && currentHighlightedBuilding !== buildingObject) {
+    setBuildingHighlighted(currentHighlightedBuilding, false);
+  }
+  setBuildingHighlighted(buildingObject, true);
+  currentHighlightedBuilding = buildingObject;
 }
 
 // ──── 🔧 显示卡片 + 地面标记 ────
@@ -190,6 +643,7 @@ function hideCard() {
   cardPosition.value = null;
   targetWorldPos = null;
   updateSelectionMarker(null);
+  clearBuildingHighlight();
 }
 
 // ──── 🔧 地面选中标记 ────
@@ -258,6 +712,239 @@ function updateSelectionMarker(worldPos) {
   }
 }
 
+function clearNavigationVisuals() {
+  for (const marker of navigationMarkers) {
+    gsap.killTweensOf(marker.scale);
+    marker.traverse((object) => {
+      if (object.geometry) object.geometry.dispose();
+      if (object.material) object.material.dispose();
+    });
+    if (scene) scene.remove(marker);
+  }
+  navigationMarkers = [];
+
+  if (walkingMarker) {
+    gsap.killTweensOf(walkingMarker.position);
+    if (walkingMarker.geometry) walkingMarker.geometry.dispose();
+    if (walkingMarker.material) walkingMarker.material.dispose();
+    if (scene) scene.remove(walkingMarker);
+    walkingMarker = null;
+  }
+
+  if (walkingTimeline) {
+    walkingTimeline.kill();
+    walkingTimeline = null;
+  }
+
+  if (navigationRouteMesh) {
+    if (navigationRouteMesh.geometry) navigationRouteMesh.geometry.dispose();
+    if (navigationRouteMesh.material) navigationRouteMesh.material.dispose();
+    if (scene) scene.remove(navigationRouteMesh);
+    navigationRouteMesh = null;
+  }
+}
+
+function createNavigationMarker(worldPos, color, label) {
+  if (!scene) return null;
+
+  const marker = new THREE.Group();
+  marker.position.copy(worldPos);
+  marker.position.y += 8;
+  marker.renderOrder = 1002;
+
+  const pin = new THREE.Mesh(
+    new THREE.SphereGeometry(18, 32, 16),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.92,
+      depthTest: false,
+      depthWrite: false
+    })
+  );
+  pin.renderOrder = 1002;
+  marker.add(pin);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(22, 30, 48),
+    new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.45,
+      depthTest: false,
+      depthWrite: false
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.renderOrder = 1001;
+  marker.add(ring);
+
+  marker.userData.label = label;
+  scene.add(marker);
+  navigationMarkers.push(marker);
+
+  gsap.to(marker.scale, {
+    x: 1.16,
+    y: 1.16,
+    z: 1.16,
+    duration: 0.75,
+    yoyo: true,
+    repeat: -1,
+    ease: 'sine.inOut'
+  });
+
+  return marker;
+}
+
+function drawNavigationRoute(points) {
+  if (!scene || points.length < 2) return;
+
+  if (navigationRouteMesh) {
+    if (navigationRouteMesh.geometry) navigationRouteMesh.geometry.dispose();
+    if (navigationRouteMesh.material) navigationRouteMesh.material.dispose();
+    scene.remove(navigationRouteMesh);
+  }
+
+  const worldPoints = points.map(point => {
+    const worldPoint = mapPosToWorld(point.x, point.y);
+    worldPoint.y += 6;
+    return worldPoint;
+  });
+
+  const curve = new THREE.CatmullRomCurve3(worldPoints, false, 'catmullrom', 0.08);
+  const geometry = new THREE.TubeGeometry(curve, Math.max(24, points.length * 16), 8, 12, false);
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x1f8cff,
+    transparent: true,
+    opacity: 0.86,
+    depthTest: false,
+    depthWrite: false
+  });
+
+  navigationRouteMesh = new THREE.Mesh(geometry, material);
+  navigationRouteMesh.renderOrder = 1000;
+  scene.add(navigationRouteMesh);
+
+  walkingMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(13, 24, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0xffc857,
+      transparent: true,
+      opacity: 0.95,
+      depthTest: false,
+      depthWrite: false
+    })
+  );
+  walkingMarker.renderOrder = 1003;
+  walkingMarker.position.copy(worldPoints[0]);
+  scene.add(walkingMarker);
+
+  animateWalkingMarker(worldPoints);
+}
+
+function animateWalkingMarker(worldPoints) {
+  if (!walkingMarker || worldPoints.length < 2) return;
+
+  if (walkingTimeline) walkingTimeline.kill();
+  walkingTimeline = gsap.timeline({ repeat: -1, repeatDelay: 0.3 });
+  for (let index = 1; index < worldPoints.length; index += 1) {
+    const segmentDistance = worldPoints[index - 1].distanceTo(worldPoints[index]);
+    walkingTimeline.to(walkingMarker.position, {
+      x: worldPoints[index].x,
+      y: worldPoints[index].y,
+      z: worldPoints[index].z,
+      duration: Math.max(0.35, segmentDistance / 260),
+      ease: 'none'
+    });
+  }
+  walkingTimeline.set(walkingMarker.position, {
+    x: worldPoints[0].x,
+    y: worldPoints[0].y,
+    z: worldPoints[0].z
+  });
+}
+
+function resetNavigationState() {
+  navigationStart = null;
+  navigationEnd = null;
+  navigationStep.value = 'start';
+  routeDistance.value = 0;
+  routeModeText.value = '';
+  navigationHint.value = '请在地图上左键点击一次，选择初始起点。';
+  clearNavigationVisuals();
+}
+
+function startNavigation() {
+  navigationMode.value = true;
+  hideCard();
+  resetNavigationState();
+}
+
+function cancelNavigation() {
+  navigationMode.value = false;
+  resetNavigationState();
+}
+
+function completeNavigationRoute() {
+  if (!navigationStart || !navigationEnd) return;
+
+  if (!loadedCampusModel || !groundPlane) {
+    navigationHint.value = '模型或地图还没有加载完成，请稍后重新选择。';
+    return;
+  }
+
+  const snappedStart = snapMapPointToWalkable(navigationStart.map);
+  const snappedEnd = snapMapPointToWalkable(navigationEnd.map);
+  navigationStart.map = snappedStart;
+  navigationEnd.map = snappedEnd;
+  navigationStart.world = mapPosToWorld(snappedStart.x, snappedStart.y);
+  navigationEnd.world = mapPosToWorld(snappedEnd.x, snappedEnd.y);
+  if (navigationMarkers[0]) {
+    navigationMarkers[0].position.copy(navigationStart.world);
+    navigationMarkers[0].position.y += 8;
+  }
+  if (navigationMarkers[1]) {
+    navigationMarkers[1].position.copy(navigationEnd.world);
+    navigationMarkers[1].position.y += 8;
+  }
+
+  const routePoints = findAStarRoute(snappedStart, snappedEnd);
+  if (!routePoints) {
+    navigationHint.value = '没有找到可绕行路径，请选择更靠近道路的起点或终点。';
+    routeModeText.value = '';
+    return;
+  }
+
+  routeDistance.value = estimateRouteDistance(routePoints);
+  routeModeText.value = `已避开 ${getBuildingObstacleRects().length} 个 3D 建筑节点`;
+  navigationHint.value = '路径已生成：路线会绕开 3D 模型中的建筑节点。';
+  drawNavigationRoute(routePoints);
+}
+
+function handleNavigationClick(event) {
+  const clickedPoint = getGroundClickPosition(event);
+  if (!clickedPoint) {
+    navigationHint.value = '没有点到地图，请在地图平面上重新点击。';
+    return;
+  }
+
+  if (navigationStep.value === 'start') {
+    navigationStart = clickedPoint;
+    createNavigationMarker(clickedPoint.world, 0x2ecc71, 'start');
+    navigationStep.value = 'end';
+    navigationHint.value = '起点已选择。请再左键点击一次，选择终点。';
+    return;
+  }
+
+  if (navigationStep.value === 'end') {
+    navigationEnd = clickedPoint;
+    createNavigationMarker(clickedPoint.world, 0xe74c3c, 'end');
+    navigationStep.value = 'done';
+    completeNavigationRoute();
+  }
+}
+
 // ──── 🔧 清除选中 ────
 function clearSelection() {
   hideCard();
@@ -282,12 +969,7 @@ const flyToBuilding = (buildingName) => {
   const box = new THREE.Box3().setFromObject(targetBuilding);
   const center = box.getCenter(new THREE.Vector3());
 
-  if (currentHighlightedBuilding) {
-    currentHighlightedBuilding.material.color.setHex(0xffffff);
-  }
-
-  targetBuilding.material.color.setHex(0x005bac);
-  currentHighlightedBuilding = targetBuilding;
+  highlightBuilding(targetBuilding);
 
   const offset = new THREE.Vector3(150, 200, 150);
 
@@ -333,7 +1015,9 @@ function updateCardScreenPosition() {
 
 defineExpose({
   flyToBuilding,
-  clearSelection
+  clearSelection,
+  startNavigation,
+  cancelNavigation
 });
 
 // ──── 保存变换 ────
@@ -417,6 +1101,8 @@ const initThree = () => {
   textureLoader.load('/campus_map.png', (texture) => {
     texture.colorSpace = THREE.SRGBColorSpace;
     imgAspectRatio = texture.image.width / texture.image.height;
+    mapPixelData = createMapPixelData(texture.image);
+    navigationGridCache = null;
 
     const canvas = document.createElement('canvas');
     canvas.width = 512;
@@ -445,6 +1131,8 @@ const initThree = () => {
       groundPlane.position.set(t.position.x, t.position.y, t.position.z);
       groundPlane.scale.set(t.scale.x, t.scale.y, t.scale.z);
       groundPlane.rotation.z = t.rotationZ || 0;
+      navigationObstacleCache = null;
+      navigationGridCache = null;
     };
 
     const savedStr = localStorage.getItem('campusMapTransform');
@@ -470,6 +1158,9 @@ const initThree = () => {
     '/tongji_campus.glb',
     (gltf) => {
       const model = gltf.scene;
+      loadedCampusModel = model;
+      navigationObstacleCache = null;
+      navigationGridCache = null;
 
       const defaultMaterial = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -496,6 +1187,8 @@ const initThree = () => {
       const box = new THREE.Box3().setFromObject(model);
       modelMinY = box.min.y - 0.1;
       if (groundPlane) groundPlane.position.y = modelMinY;
+      navigationObstacleCache = null;
+      navigationGridCache = null;
 
       controls.target.set(0, 0, 0);
       camera.position.set(0, 800, 800);
@@ -586,6 +1279,11 @@ const onClick = (event) => {
 
   if (!mapContainer.value || !camera || !scene || !raycaster || !mouse) return;
 
+  if (navigationMode.value) {
+    handleNavigationClick(event);
+    return;
+  }
+
   const rect = mapContainer.value.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -594,24 +1292,21 @@ const onClick = (event) => {
 
   // 优先检测 3D 模型建筑
   const intersects = raycaster.intersectObjects(scene.children, true);
-  let clickedMesh = null;
+  let clickedBuilding = null;
   for (const intersect of intersects) {
     const obj = intersect.object;
-    // 忽略地面、标记、高亮框，以及辅助线段
-    if (obj.isMesh && obj !== groundPlane && obj !== selectionMarker) {
-      if (obj.type !== 'LineSegments' && !obj.name.includes("edge") && !obj.name.includes("Line")) {
-        clickedMesh = obj;
-        break;
-      }
-    }
+    if (obj === groundPlane || obj.type === 'LineSegments') continue;
+    clickedBuilding = findBuildingRootObject(obj);
+    if (clickedBuilding) break;
   }
 
-  if (clickedMesh) {
-    emit('building-click', clickedMesh.name);
-    const buildingInfo = props.buildings.find(b => b.modelName === clickedMesh.name);
+  if (clickedBuilding) {
+    emit('building-click', clickedBuilding.name);
+    const buildingInfo = props.buildings.find(b => b.modelName === clickedBuilding.name);
     if (buildingInfo) {
-      showCard(buildingInfo, clickedMesh);
+      showCard(buildingInfo, clickedBuilding);
     }
+    highlightBuilding(clickedBuilding);
     return;
   }
 
@@ -638,6 +1333,7 @@ const cleanupThree = () => {
   }
 
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
+  clearNavigationVisuals();
 
   if (selectionMarker) {
     gsap.killTweensOf(selectionMarker.scale);
@@ -680,6 +1376,67 @@ onBeforeUnmount(() => { cleanupThree(); });
   width: 100%;
   height: 100%;
   overflow: hidden;
+}
+
+.navigation-panel {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 180;
+  min-width: 300px;
+  max-width: 420px;
+  padding: 14px 18px;
+  border-radius: 18px;
+  background: rgba(16, 24, 39, 0.84);
+  color: #fff;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22);
+  text-align: center;
+}
+
+.navigation-title {
+  font-size: 15px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.navigation-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.navigation-distance {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7dd3fc;
+}
+
+.navigation-mode-text {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.navigation-cancel {
+  margin-top: 10px;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.navigation-cancel:hover {
+  background: rgba(255, 255, 255, 0.24);
 }
 
 /* ──── 交互卡片 ──── */

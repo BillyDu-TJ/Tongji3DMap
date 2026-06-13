@@ -35,9 +35,18 @@
             size="small"
             @click="toggleVoice"
             :class="{ listening: isListening }"
+            aria-label="中文语音输入建筑名"
+            title="中文语音输入建筑名"
           />
         </template>
       </el-input>
+    </div>
+
+    <div class="navigation-section">
+      <button class="navigation-btn" @click="$emit('start-navigation')">
+        <span class="navigation-icon">↱</span>
+        <span>开始导航</span>
+      </button>
     </div>
 
     <div class="category-filters">
@@ -95,7 +104,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   Search, Mic, Microphone, Clock,
@@ -107,11 +116,12 @@ const props = defineProps({
   selectedBuilding: { type: Object, default: null }
 })
 
-const emit = defineEmits(['select-building', 'search', 'voice-search'])
+const emit = defineEmits(['select-building', 'search', 'voice-search', 'start-navigation'])
 
 const searchQuery = ref('')
 const isListening = ref(false)
 const activeCategory = ref('all')
+let recognitionInstance = null
 
 const categories = [
   { key: 'all', label: 'All', icon: 'Menu' },
@@ -146,6 +156,60 @@ function handleClear() {
   emit('select-building', null)
 }
 
+function normalizeBuildingName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s_·.,，。!?！？、:：;；"'“”‘’()（）-]/g, '')
+}
+
+function getBuildingNameCandidates(building) {
+  return [
+    building.uiNameZh,
+    building.uiName,
+    building.modelName,
+    building.modelName?.replace(/_/g, ' ')
+  ].filter(Boolean)
+}
+
+function findBuildingByVoiceText(text) {
+  const query = normalizeBuildingName(text)
+  if (!query) return null
+
+  const candidates = props.buildings.flatMap(building =>
+    getBuildingNameCandidates(building).map(name => ({
+      building,
+      normalizedName: normalizeBuildingName(name)
+    }))
+  ).filter(item => item.normalizedName)
+
+  const exact = candidates.find(item => item.normalizedName === query)
+  if (exact) return exact.building
+
+  const spokenContainsName = candidates
+    .filter(item => query.includes(item.normalizedName))
+    .sort((a, b) => b.normalizedName.length - a.normalizedName.length)
+  if (spokenContainsName.length) return spokenContainsName[0].building
+
+  const partialMatches = candidates.filter(item => item.normalizedName.includes(query))
+  const uniqueMatches = [...new Map(partialMatches.map(item => [item.building.id, item.building])).values()]
+  return uniqueMatches.length === 1 ? uniqueMatches[0] : null
+}
+
+function handleVoiceResult(transcript) {
+  const matchedBuilding = findBuildingByVoiceText(transcript)
+  if (!matchedBuilding) {
+    searchQuery.value = transcript
+    emit('voice-search', transcript)
+    ElMessage.warning(`未找到建筑：${transcript}`)
+    return
+  }
+
+  activeCategory.value = 'all'
+  searchQuery.value = matchedBuilding.uiNameZh || matchedBuilding.uiName
+  emit('select-building', matchedBuilding)
+  ElMessage.success(`已定位：${matchedBuilding.uiNameZh}`)
+}
+
 function toggleVoice() {
   if (isListening.value) {
     stopListening()
@@ -157,32 +221,50 @@ function toggleVoice() {
 function startListening() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
   if (!SpeechRecognition) {
-    ElMessage.warning('Speech recognition is not supported in this browser.')
+    ElMessage.warning('当前浏览器不支持语音识别。')
     return
   }
   isListening.value = true
   const recognition = new SpeechRecognition()
-  recognition.lang = 'en-US'
+  recognitionInstance = recognition
+  recognition.lang = 'zh-CN'
+  recognition.continuous = false
   recognition.interimResults = false
   recognition.maxAlternatives = 1
   recognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript
-    searchQuery.value = transcript
-    emit('voice-search', transcript)
+    const transcript = event.results[0][0].transcript.trim()
+    handleVoiceResult(transcript)
     stopListening()
   }
-  recognition.onerror = () => {
+  recognition.onerror = (event) => {
+    recognitionInstance = null
     isListening.value = false
+    if (event.error !== 'aborted' && event.error !== 'no-speech') {
+      ElMessage.warning('语音识别失败，请再试一次。')
+    }
   }
   recognition.onend = () => {
+    recognitionInstance = null
     isListening.value = false
   }
   recognition.start()
 }
 
 function stopListening() {
+  if (recognitionInstance) {
+    try {
+      recognitionInstance.stop()
+    } catch (error) {
+      recognitionInstance.abort?.()
+    }
+    recognitionInstance = null
+  }
   isListening.value = false
 }
+
+onBeforeUnmount(() => {
+  stopListening()
+})
 </script>
 
 <style scoped>
@@ -236,6 +318,39 @@ function stopListening() {
 
 .search-section {
   padding: 0 20px 16px;
+}
+
+.navigation-section {
+  padding: 0 20px 16px;
+}
+
+.navigation-btn {
+  width: 100%;
+  height: 42px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), #2f80ed);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 10px 24px rgba(0, 90, 156, 0.24);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.navigation-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(0, 90, 156, 0.32);
+}
+
+.navigation-icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 .mic-btn {
