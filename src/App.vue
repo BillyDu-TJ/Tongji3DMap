@@ -13,6 +13,8 @@
         :buildings="buildings"
         :selected-building="selectedBuilding"
         :navigation-path="navigationPath"
+        @building-click="handleBuildingClick"
+        @clear-selection="handleClearSelection"
       />
       <Dashboard
         :selected-building="selectedBuilding"
@@ -28,115 +30,11 @@ import { ref, reactive } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import CampusMap from './components/CampusMap.vue'
 import Dashboard from './components/Dashboard.vue'
+import buildingsData from './assets/buildings.json'
 
 const campusMapRef = ref(null)
 
-const buildings = ref([
-  {
-    id: 'library',
-    name: 'Siping Library',
-    nameZh: '四平路校区图书馆',
-    category: 'academic',
-    icon: 'Reading',
-    position: { x: 0.3, y: 0.45 },
-    description: 'The main library of Tongji University Siping Campus, housing over 3 million volumes across 12 floors.',
-    openTime: '07:30 - 22:30',
-    floors: 12,
-    area: '36,000 m²',
-    crowdLevel: 'medium'
-  },
-  {
-    id: 'zhonghe',
-    name: 'Zhonghe Building',
-    nameZh: '衷和楼',
-    category: 'academic',
-    icon: 'OfficeBuilding',
-    position: { x: 0.55, y: 0.35 },
-    description: 'The iconic comprehensive teaching building, featuring modern lecture halls and panoramic city views from the top floor.',
-    openTime: '06:00 - 22:00',
-    floors: 20,
-    area: '45,000 m²',
-    crowdLevel: 'high'
-  },
-  {
-    id: 'auditorium',
-    name: 'Grand Auditorium',
-    nameZh: '大礼堂',
-    category: 'culture',
-    icon: 'Mic',
-    position: { x: 0.4, y: 0.6 },
-    description: 'The historic 1,200-seat auditorium hosting major university ceremonies and cultural performances since 1961.',
-    openTime: '08:00 - 21:00',
-    floors: 2,
-    area: '8,000 m²',
-    crowdLevel: 'low'
-  },
-  {
-    id: 'south',
-    name: 'South Teaching Building',
-    nameZh: '南楼',
-    category: 'academic',
-    icon: 'School',
-    position: { x: 0.25, y: 0.55 },
-    description: 'Main teaching building for science and engineering courses with 80+ classrooms.',
-    openTime: '06:30 - 22:00',
-    floors: 6,
-    area: '20,000 m²',
-    crowdLevel: 'high'
-  },
-  {
-    id: 'north',
-    name: 'North Teaching Building',
-    nameZh: '北楼',
-    category: 'academic',
-    icon: 'School',
-    position: { x: 0.5, y: 0.55 },
-    description: 'Teaching building primarily for humanities and social sciences departments.',
-    openTime: '06:30 - 22:00',
-    floors: 6,
-    area: '18,000 m²',
-    crowdLevel: 'medium'
-  },
-  {
-    id: 'ruian',
-    name: 'Ruian Building',
-    nameZh: '瑞安楼',
-    category: 'admin',
-    icon: 'Stamp',
-    position: { x: 0.6, y: 0.5 },
-    description: 'Administration and research center, housing key university management offices and conference facilities.',
-    openTime: '08:00 - 17:30',
-    floors: 10,
-    area: '15,000 m²',
-    crowdLevel: 'medium'
-  },
-  {
-    id: 'xueyuan',
-    name: 'Xueyuan Canteen',
-    nameZh: '学苑食堂',
-    category: 'dining',
-    icon: 'Food',
-    position: { x: 0.35, y: 0.7 },
-    description: 'The largest student canteen on campus, serving a wide variety of Chinese and international cuisine.',
-    openTime: '06:30 - 09:00 / 11:00 - 13:00 / 17:00 - 19:00',
-    floors: 3,
-    area: '12,000 m²',
-    crowdLevel: 'high'
-  },
-  {
-    id: 'gym',
-    name: 'Sports Complex',
-    nameZh: '综合体育馆',
-    category: 'sports',
-    icon: 'TrophyBase',
-    position: { x: 0.7, y: 0.65 },
-    description: 'Modern indoor sports facility with basketball courts, swimming pool, and fitness center.',
-    openTime: '08:00 - 22:00',
-    floors: 4,
-    area: '18,000 m²',
-    crowdLevel: 'medium'
-  }
-])
+const buildings = ref(buildingsData)
 
 const selectedBuilding = ref(null)
 const navigationPath = ref(null)
@@ -154,32 +52,55 @@ setInterval(() => {
   stats.activeUsers = 300 + Math.floor(Math.random() * 100)
 }, 3000)
 
+// Sidebar click → fly to building on map
 function handleSelectBuilding(building) {
   selectedBuilding.value = building
-  if (campusMapRef.value) {
-    campusMapRef.value.flyToBuilding(building)
+  if (building && campusMapRef.value && building.modelName) {
+    campusMapRef.value.flyToBuilding(building.modelName)
+  } else if (!building && campusMapRef.value) {
+    campusMapRef.value.clearSelection()
   }
   navigationPath.value = null
 }
 
+// Search by text query
 function handleSearch(query) {
   const found = buildings.value.find(
-    b => b.name.toLowerCase().includes(query.toLowerCase()) ||
-         b.nameZh.includes(query)
+    b => (b.uiName && b.uiName.toLowerCase().includes(query.toLowerCase())) ||
+         (b.uiNameZh && b.uiNameZh.includes(query))
   )
   if (found) {
     handleSelectBuilding(found)
   }
 }
 
+// Voice search result
 function handleVoiceSearch(buildingName) {
   const found = buildings.value.find(
-    b => b.name.toLowerCase().includes(buildingName.toLowerCase()) ||
-         b.nameZh.includes(buildingName)
+    b => (b.uiName && b.uiName.toLowerCase().includes(buildingName.toLowerCase())) ||
+         (b.uiNameZh && b.uiNameZh.includes(buildingName))
   )
   if (found) {
     handleSelectBuilding(found)
   }
+}
+
+// Map click → update selected building in sidebar & dashboard
+function handleBuildingClick(meshName) {
+  // Use modelName to find the building
+  const found = buildings.value.find(
+    b => b.modelName === meshName
+  )
+  if (found) {
+    selectedBuilding.value = found
+    navigationPath.value = null
+  }
+}
+
+// 地图卡片关闭 / 点击空白 → 清除选中
+function handleClearSelection() {
+  selectedBuilding.value = null
+  navigationPath.value = null
 }
 </script>
 

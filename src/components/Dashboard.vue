@@ -1,6 +1,7 @@
 <template>
   <section class="dashboard">
     <div class="dashboard-inner">
+      <!-- Global Stats -->
       <div class="stat-group">
         <div class="stat-item">
           <div class="stat-icon visitors">
@@ -35,6 +36,7 @@
 
       <div class="divider"></div>
 
+      <!-- Trending / Hot Spots -->
       <div class="hot-spots">
         <span class="hot-label">Trending</span>
         <div class="hot-tags">
@@ -47,26 +49,80 @@
 
       <div class="divider"></div>
 
+      <!-- Selected Building Detail -->
       <div class="selected-info" v-if="selectedBuilding">
         <div class="selected-header">
           <span class="selected-dot" :class="selectedBuilding.crowdLevel"></span>
-          <span class="selected-name">{{ selectedBuilding.name }}</span>
+          <span class="selected-name">{{ selectedBuilding.uiName }}</span>
+          <span class="selected-name-zh">{{ selectedBuilding.uiNameZh }}</span>
         </div>
+
+        <div class="selected-divider"></div>
+
         <div class="selected-details">
-          <span>{{ selectedBuilding.area }}</span>
-          <span>{{ selectedBuilding.floors }} Floors</span>
-          <span>Crowd: {{ selectedBuilding.crowdLevel }}</span>
+          <!-- Open Time -->
+          <div class="detail-item">
+            <el-icon class="detail-icon"><Clock /></el-icon>
+            <div class="detail-content">
+              <span class="detail-label">Open Hours</span>
+              <span class="detail-value">{{ selectedBuilding.openTime }}</span>
+            </div>
+          </div>
+
+          <!-- Daily Visitors -->
+          <div class="detail-item">
+            <el-icon class="detail-icon"><UserFilled /></el-icon>
+            <div class="detail-content">
+              <span class="detail-label">Today's Visitors</span>
+              <span class="detail-value">{{ (selectedBuilding.dailyVisitors || 0).toLocaleString() }}</span>
+            </div>
+          </div>
+
+          <!-- Area & Floors -->
+          <div class="detail-item">
+            <el-icon class="detail-icon"><OfficeBuilding /></el-icon>
+            <div class="detail-content">
+              <span class="detail-label">Size</span>
+              <span class="detail-value">{{ selectedBuilding.area }} · {{ selectedBuilding.floors }} Floors</span>
+            </div>
+          </div>
+
+          <!-- Crowd Level Bar -->
+          <div class="detail-item crowd-item">
+            <el-icon class="detail-icon"><Connection /></el-icon>
+            <div class="detail-content crowd-content">
+              <div class="crowd-header">
+                <span class="detail-label">Crowd Level</span>
+                <span class="crowd-percent">{{ selectedBuilding.crowdPercent || 0 }}%</span>
+              </div>
+              <div class="crowd-bar-track">
+                <div
+                  class="crowd-bar-fill"
+                  :class="selectedBuilding.crowdLevel"
+                  :style="{ width: (selectedBuilding.crowdPercent || 0) + '%' }"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="selected-description" v-if="selectedBuilding.description">
+          {{ selectedBuilding.description }}
         </div>
       </div>
+
+      <!-- Empty state -->
       <div class="selected-info empty" v-else>
-        <span class="hint-text">Select a building to view details</span>
+        <el-icon class="empty-icon"><InfoFilled /></el-icon>
+        <span class="hint-text">Click a building on the map or sidebar to view details</span>
       </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { UserFilled, Connection, Clock, TrendCharts } from '@element-plus/icons-vue'
+import { UserFilled, Connection, Clock, TrendCharts, OfficeBuilding, InfoFilled } from '@element-plus/icons-vue'
 
 defineProps({
   selectedBuilding: { type: Object, default: null },
@@ -81,7 +137,7 @@ function formatTime(date) {
 
 <style scoped>
 .dashboard {
-  height: 80px;
+  min-height: 88px;
   border-top: 1px solid var(--border-glass);
   background: var(--bg-glass);
   backdrop-filter: blur(24px);
@@ -89,19 +145,21 @@ function formatTime(date) {
   flex-shrink: 0;
   z-index: 10;
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
 }
 
 .dashboard-inner {
-  height: 100%;
   display: flex;
   align-items: center;
-  padding: 0 28px;
-  gap: 24px;
+  padding: 0 20px;
+  gap: 20px;
+  height: 100%;
 }
 
+/* ============ Stats Group ============ */
 .stat-group {
   display: flex;
-  gap: 28px;
+  gap: 22px;
   flex-shrink: 0;
 }
 
@@ -112,13 +170,14 @@ function formatTime(date) {
 }
 
 .stat-icon {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 15px;
+  flex-shrink: 0;
 }
 
 .stat-icon.visitors { background: rgba(74, 144, 217, 0.15); color: var(--accent); }
@@ -131,7 +190,7 @@ function formatTime(date) {
 }
 
 .stat-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
@@ -145,22 +204,24 @@ function formatTime(date) {
   letter-spacing: 0.5px;
 }
 
+/* ============ Divider ============ */
 .divider {
   width: 1px;
-  height: 36px;
+  height: 32px;
   background: var(--border-glass);
   flex-shrink: 0;
 }
 
+/* ============ Hot Spots ============ */
 .hot-spots {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
 .hot-label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -169,28 +230,30 @@ function formatTime(date) {
 
 .hot-tags {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .hot-tag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 12px;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 10px;
   background: rgba(229, 168, 85, 0.1);
   color: var(--warning);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   white-space: nowrap;
 }
 
+/* ============ Selected Building ============ */
 .selected-info {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .selected-info.empty {
@@ -208,23 +271,133 @@ function formatTime(date) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.selected-dot.low { background: var(--success); box-shadow: 0 0 6px rgba(76, 175, 136, 0.4); }
-.selected-dot.medium { background: var(--warning); box-shadow: 0 0 6px rgba(229, 168, 85, 0.4); }
-.selected-dot.high { background: var(--danger); box-shadow: 0 0 6px rgba(224, 85, 106, 0.4); }
+.selected-dot.low { background: var(--success); box-shadow: 0 0 6px rgba(76, 175, 136, 0.5); }
+.selected-dot.medium { background: var(--warning); box-shadow: 0 0 6px rgba(229, 168, 85, 0.5); }
+.selected-dot.high { background: var(--danger); box-shadow: 0 0 6px rgba(224, 85, 106, 0.5); }
 
 .selected-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
+.selected-name-zh {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.selected-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-glass);
+  flex-shrink: 0;
+}
+
+/* ============ Detail Items ============ */
 .selected-details {
   display: flex;
-  gap: 16px;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.detail-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.detail-icon {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.detail-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.detail-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* ============ Crowd Bar ============ */
+.crowd-item {
+  min-width: 100px;
+}
+
+.crowd-content {
+  flex: 1;
+  gap: 3px;
+}
+
+.crowd-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.crowd-percent {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.crowd-bar-track {
+  width: 80px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.crowd-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.crowd-bar-fill.low { background: var(--success); }
+.crowd-bar-fill.medium { background: var(--warning); }
+.crowd-bar-fill.high { background: var(--danger); }
+
+/* ============ Description ============ */
+.selected-description {
   font-size: 11px;
   color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  flex-shrink: 1;
+}
+
+/* ============ Empty State ============ */
+.empty-icon {
+  color: var(--text-muted);
+  font-size: 18px;
 }
 
 .hint-text {
