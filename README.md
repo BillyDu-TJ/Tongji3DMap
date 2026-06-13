@@ -29,7 +29,7 @@
 
 我们的项目——**同济校园3D导航系统**（Tongji Campus 3D Navigator）——将同济大学四平路校区转化为一个交互式3D数字孪生体。通过结合基于Web的3D渲染（Three.js）、智能路径规划和多模态交互（语音+触控），我们提供了一种直观、信息丰富且面向多元用户群体的校园导航体验。
 
-![image-20260613190234251](C:\Users\LENOVO\OneDrive - tongji.edu.cn\桌面\新建文件夹\Tongji3DMap\image-20260613190234251.png)
+![](https://github.com/BillyDu-TJ/Tongji3DMap/blob/main/image/image-20260613190234251.png)
 
 ### 1.2 项目目标
 
@@ -81,8 +81,7 @@
 ### 2.1 用户画像
 
 理解"谁在使用系统"是人机交互设计的基础。我们通过分析真实的校园访客场景，识别出**四类主要用户画像**：
-
-| 照片 | <img src="C:\Users\LENOVO\OneDrive - tongji.edu.cn\桌面\新建文件夹\Tongji3DMap\image\image-20260613191439602.png" alt="image-20260613191439602" style="zoom:80%;" /> | ![image-20260613191217616](C:\Users\LENOVO\OneDrive - tongji.edu.cn\桌面\新建文件夹\Tongji3DMap\image\image-20260613191217616.png) | <img src="C:\Users\LENOVO\OneDrive - tongji.edu.cn\桌面\新建文件夹\Tongji3DMap\image\image-20260613191359737.png" alt="image-20260613191359737" style="zoom:150%;" /> | <img src="C:\Users\LENOVO\OneDrive - tongji.edu.cn\桌面\新建文件夹\Tongji3DMap\image\image-20260613190507130.png" alt="image-20260613190507130" style="zoom: 200%;" /> |
+| 照片 |![](https://github.com/BillyDu-TJ/Tongji3DMap/blob/main/image/image-20260613191439602.png)  |![](https://github.com/BillyDu-TJ/Tongji3DMap/blob/main/image/image-20260613191217616.png)  |![](https://github.com/BillyDu-TJ/Tongji3DMap/blob/main/image/image-20260613191359737.png)  |![](https://github.com/BillyDu-TJ/Tongji3DMap/blob/main/image/image-20260613190507130.png) |
 | :---: | :---: | :---: | :---: | :---: |
 | **姓名** | **小明** | **Sarah博士** | **王阿姨** | **李萍** |
 | **身份** | 本科新生 | 访问学者 | 学生家长 | 活动组织者 |
